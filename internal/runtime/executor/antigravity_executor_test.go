@@ -1,8 +1,11 @@
 package executor
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 func TestParseAntigravityRetryDelay_Valid429Response(t *testing.T) {
@@ -139,3 +142,95 @@ func TestNewAntigravityStatusErr_429WithoutRetryInfo(t *testing.T) {
 		t.Errorf("Expected nil retryAfter when no RetryInfo, got %v", *err.retryAfter)
 	}
 }
+
+func TestInjectAntigravitySystemInstruction_NoExistingInstruction(t *testing.T) {
+	// Test case: no existing systemInstruction
+	payload := []byte(`{"request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}}`)
+
+	result := injectAntigravitySystemInstruction(payload)
+
+	// Verify systemInstruction was created
+	if !gjson.GetBytes(result, "request.systemInstruction").Exists() {
+		t.Fatal("Expected systemInstruction to be created")
+	}
+
+	// Verify it has exactly one part (Antigravity's prompt)
+	parts := gjson.GetBytes(result, "request.systemInstruction.parts")
+	if !parts.IsArray() || len(parts.Array()) != 1 {
+		t.Fatalf("Expected exactly 1 part, got %d", len(parts.Array()))
+	}
+
+	// Verify the content contains Antigravity's identity
+	text := gjson.GetBytes(result, "request.systemInstruction.parts.0.text").String()
+	if !strings.Contains(text, "Antigravity") || !strings.Contains(text, "<identity>") {
+		t.Error("Expected Antigravity system prompt content")
+	}
+}
+
+func TestInjectAntigravitySystemInstruction_WithExistingInstruction(t *testing.T) {
+	// Test case: existing systemInstruction should be preserved
+	payload := []byte(`{
+		"request": {
+			"systemInstruction": {
+				"role": "user",
+				"parts": [
+					{"text": "You are a helpful assistant"},
+					{"text": "Always respond in JSON"}
+				]
+			},
+			"contents": [{"role":"user","parts":[{"text":"hello"}]}]
+		}
+	}`)
+
+	result := injectAntigravitySystemInstruction(payload)
+
+	// Verify systemInstruction exists
+	if !gjson.GetBytes(result, "request.systemInstruction").Exists() {
+		t.Fatal("Expected systemInstruction to exist")
+	}
+
+	// Verify it has 3 parts: Antigravity + 2 user parts
+	parts := gjson.GetBytes(result, "request.systemInstruction.parts")
+	if !parts.IsArray() || len(parts.Array()) != 3 {
+		t.Fatalf("Expected exactly 3 parts, got %d", len(parts.Array()))
+	}
+
+	// Verify first part is Antigravity's prompt
+	firstText := gjson.GetBytes(result, "request.systemInstruction.parts.0.text").String()
+	if !strings.Contains(firstText, "Antigravity") {
+		t.Error("Expected first part to be Antigravity's prompt")
+	}
+
+	// Verify second and third parts are user's original prompts
+	secondText := gjson.GetBytes(result, "request.systemInstruction.parts.1.text").String()
+	if secondText != "You are a helpful assistant" {
+		t.Errorf("Expected second part to be 'You are a helpful assistant', got '%s'", secondText)
+	}
+
+	thirdText := gjson.GetBytes(result, "request.systemInstruction.parts.2.text").String()
+	if thirdText != "Always respond in JSON" {
+		t.Errorf("Expected third part to be 'Always respond in JSON', got '%s'", thirdText)
+	}
+}
+
+func TestInjectAntigravitySystemInstruction_EmptyParts(t *testing.T) {
+	// Test case: systemInstruction exists but parts array is empty
+	payload := []byte(`{
+		"request": {
+			"systemInstruction": {
+				"role": "user",
+				"parts": []
+			},
+			"contents": [{"role":"user","parts":[{"text":"hello"}]}]
+		}
+	}`)
+
+	result := injectAntigravitySystemInstruction(payload)
+
+	// Verify it has exactly 1 part (Antigravity's prompt)
+	parts := gjson.GetBytes(result, "request.systemInstruction.parts")
+	if !parts.IsArray() || len(parts.Array()) != 1 {
+		t.Fatalf("Expected exactly 1 part, got %d", len(parts.Array()))
+	}
+}
+
