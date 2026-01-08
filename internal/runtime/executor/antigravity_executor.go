@@ -1079,6 +1079,43 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 	return auth, nil
 }
 
+// filterUnsupportedToolsForClaude removes tools not supported by Claude models via Antigravity.
+// Currently filters out: WebSearch
+func filterUnsupportedToolsForClaude(payload []byte) []byte {
+	unsupportedTools := []string{"WebSearch"}
+
+	tools := gjson.GetBytes(payload, "request.tools")
+	if !tools.IsArray() {
+		return payload
+	}
+
+	template := string(payload)
+	for toolIdx, tool := range tools.Array() {
+		funcDecls := tool.Get("functionDeclarations")
+		if !funcDecls.IsArray() {
+			continue
+		}
+
+		// Build new functionDeclarations array (filtered)
+		var newDecls []interface{}
+		for _, decl := range funcDecls.Array() {
+			name := decl.Get("name").String()
+			if !util.InArray(unsupportedTools, name) {
+				newDecls = append(newDecls, decl.Value())
+			} else {
+				log.Debugf("filtering unsupported tool for Claude: %s", name)
+			}
+		}
+
+		// Set the new array to replace the old one
+		template, _ = sjson.Set(template,
+			fmt.Sprintf("request.tools.%d.functionDeclarations", toolIdx),
+			newDecls)
+	}
+
+	return []byte(template)
+}
+
 func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyauth.Auth, token, modelName string, payload []byte, stream bool, alt, baseURL string) (*http.Request, error) {
 	if token == "" {
 		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing access token"}
@@ -1130,6 +1167,9 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		strJSON = util.CleanJSONSchemaForAntigravity(strJSON)
 
 		payload = []byte(strJSON)
+
+		// Filter unsupported tools for Claude models (e.g., WebSearch)
+		payload = filterUnsupportedToolsForClaude(payload)
 	}
 
 	// Inject Antigravity system prompt while preserving user's existing systemInstruction
