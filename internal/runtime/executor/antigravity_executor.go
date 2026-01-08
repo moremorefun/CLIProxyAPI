@@ -1079,10 +1079,11 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 	return auth, nil
 }
 
-// filterUnsupportedToolsForClaude handles tools not supported by Claude models via Antigravity.
-// If mcp__router__web_search exists, it creates a copy named WebSearch to replace the original.
-// Otherwise, it removes WebSearch from functionDeclarations.
+// filterUnsupportedToolsForClaude removes tools not supported by Claude models via Antigravity.
+// Currently filters out: WebSearch
 func filterUnsupportedToolsForClaude(payload []byte) []byte {
+	unsupportedTools := []string{"WebSearch"}
+
 	tools := gjson.GetBytes(payload, "request.tools")
 	if !tools.IsArray() {
 		return payload
@@ -1095,35 +1096,14 @@ func filterUnsupportedToolsForClaude(payload []byte) []byte {
 			continue
 		}
 
-		// First pass: find mcp__router__web_search definition
-		var mcpWebSearchDecl map[string]interface{}
-		for _, decl := range funcDecls.Array() {
-			if decl.Get("name").String() == "mcp__router__web_search" {
-				mcpWebSearchDecl = decl.Value().(map[string]interface{})
-				break
-			}
-		}
-
-		// Second pass: build new functionDeclarations array
+		// Build new functionDeclarations array (filtered)
 		var newDecls []interface{}
 		for _, decl := range funcDecls.Array() {
 			name := decl.Get("name").String()
-			if name == "WebSearch" {
-				if mcpWebSearchDecl != nil {
-					// Replace WebSearch with a copy of mcp__router__web_search (renamed to WebSearch)
-					webSearchCopy := make(map[string]interface{})
-					for k, v := range mcpWebSearchDecl {
-						webSearchCopy[k] = v
-					}
-					webSearchCopy["name"] = "WebSearch"
-					newDecls = append(newDecls, webSearchCopy)
-					log.Debugf("replaced WebSearch with mcp__router__web_search definition")
-				} else {
-					// No mcp__router__web_search found, remove WebSearch
-					log.Debugf("filtering unsupported tool for Claude: %s", name)
-				}
-			} else {
+			if !util.InArray(unsupportedTools, name) {
 				newDecls = append(newDecls, decl.Value())
+			} else {
+				log.Debugf("filtering unsupported tool for Claude: %s", name)
 			}
 		}
 
